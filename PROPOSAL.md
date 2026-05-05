@@ -82,7 +82,7 @@ Spielern in einem Multi-Client-Test.
 
 ---
 
-## 3. Verwendete KI
+## 2. Verwendete KI
 
 | Mitglied |      KI      |
 |----------|--------------|
