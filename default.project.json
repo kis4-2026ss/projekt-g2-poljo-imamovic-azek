@@ -1,0 +1,74 @@
+{
+  "name": "Game_1",
+  "globIgnorePaths": [
+    "**/package.json",
+    "**/tsconfig.json",
+    "**/.gitkeep"
+  ],
+  "tree": {
+    "$className": "DataModel",
+
+    "ServerScriptService": {
+      "Services": {
+        "$path": "src/server/Services"
+      },
+      "Main": {
+        "$path": "src/server/Main.server.luau"
+      }
+    },
+
+    "StarterPlayer": {
+      "$properties": {
+        "CameraMinZoomDistance": 0,
+        "CameraMaxZoomDistance": 20,
+        "EnableMouseLockOption": false
+      },
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "Controllers": {
+          "$className": "Folder",
+          "$path": "src/client/Controllers"
+        },
+        "Main": {
+          "$path": "src/client/Main.client.luau"
+        }
+      }
+    },
+
+    "ReplicatedStorage": {
+      "Shared": {
+        "$path": "src/shared"
+      },
+      "UI": {
+        "$path": "src/ui"
+      },
+      "Assets": {
+        "$path": "assets"
+      },
+      "Packages": {
+        "$path": "Packages",
+        "$ignoreUnknownInstances": true
+      }
+    },
+
+    "Workspace": {
+      "$properties": {
+        "Gravity": 196.2,
+        "FilteringEnabled": true
+      }
+    },
+
+    "Lighting": {
+      "$properties": {
+        "Ambient": [0.2, 0.2, 0.2],
+        "TimeOfDay": "14:00:00"
+      }
+    },
+
+    "StarterGui": {
+      "$properties": {
+        "ResetPlayerGuiOnSpawn": false
+      }
+    }
+  }
+}
