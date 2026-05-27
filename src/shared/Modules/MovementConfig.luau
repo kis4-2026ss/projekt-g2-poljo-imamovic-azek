@@ -28,7 +28,7 @@ local MovementConfig = {
     },
 
     DoubleJump = {
-        Velocity = 55,
+        Velocity = 117,
     },
 
     Vault = {
@@ -69,30 +69,24 @@ local MovementConfig = {
         Cooldown = 0.14,
     },
 
-    Dive = {
-        ForwardSpeed = 54,
-        UpSpeed = 14,
-        Cooldown = 0.9,
-    },
-
-    Roll = {
-        Duration = 0.55,
-        ForwardSpeed = 30,
-        HipHeightDrop = 0,
-        FallTriggerSpeed = 52,
-    },
-
     Momentum = {
         -- Extra forward speed given when jumping while sliding (rewards chaining)
         SlideJumpForwardBoost = 6,
+    },
+
+    BunnyChain = {
+        -- Surf-style chain: slide -> jump -> slide within Window grants a chain link.
+        -- Each link adds BonusPerLink to the next slide's speed, capped at MaxBonus.
+        -- Chain breaks if grounded too long without a slide entry.
+        Window = 0.4,
+        BonusPerLink = 10,
+        MaxBonus = 50,
     },
 
     Camera = {
         NormalFOV = 70,
         SlideFOV = 86,
         WallrunFOV = 82,
-        DiveFOV = 92,
-        RollFOV = 82,
         VaultFOV = 80,
         MantleFOV = 78,
         FOVResponsiveness = 9,
@@ -102,13 +96,11 @@ local MovementConfig = {
         TiltSlide = math.rad(6),
         TiltWallrunLeft = -math.rad(22),
         TiltWallrunRight = math.rad(22),
-        TiltRoll = math.rad(18),
         TiltResponsiveness = 10,
 
         -- Humanoid.CameraOffset values (vertical/sideways body-relative shift)
         OffsetNone = Vector3.zero,
         OffsetSlide = Vector3.new(0, -1.1, 0),
-        OffsetRoll = Vector3.new(0, -0.9, 0),
         OffsetWallrunLeft = Vector3.new(-0.5, 0, 0),
         OffsetWallrunRight = Vector3.new(0.5, 0, 0),
         OffsetResponsiveness = 12,

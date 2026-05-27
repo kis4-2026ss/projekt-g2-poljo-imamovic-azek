@@ -20,7 +20,7 @@
     "StarterPlayer": {
       "$properties": {
         "CameraMinZoomDistance": 0,
-        "CameraMaxZoomDistance": 20,
+        "CameraMaxZoomDistance": 0,
         "EnableMouseLockOption": false
       },
       "StarterPlayerScripts": {
@@ -62,6 +62,13 @@
       "$properties": {
         "Ambient": [0.2, 0.2, 0.2],
         "TimeOfDay": "14:00:00"
+      }
+    },
+
+    "Players": {
+      "$properties": {
+        "MaxPlayers": 10,
+        "PreferredPlayers": 6
       }
     },
 

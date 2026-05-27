@@ -67,49 +67,75 @@ local function makeHoldTimesByUserId(holdTimes: { [Player]: number }): { [number
     return result
 end
 
-function RoundService:_teleportPlayerToSpawn(player: Player, spawnName: string)
-    local spawnPart = MapService:GetSpawnPoint(spawnName)
-    if not spawnPart then
-        return
-    end
+function RoundService:_teleportPlayerToPosition(player: Player, position: Vector3)
     local character = player.Character
     if not character then
         return
     end
     local root = character:FindFirstChild("HumanoidRootPart")
     if root and root:IsA("BasePart") then
-        root.CFrame = CFrame.new(spawnPart.Position + Vector3.new(0, 5, 0))
+        root.CFrame = CFrame.new(position + Vector3.new(0, 5, 0))
     end
 end
 
 function RoundService:_assignSpawns()
-    local spawnNames = { "Player1", "Player2" }
-    for i, player in ipairs(Players:GetPlayers()) do
-        local spawnName = spawnNames[i]
-        if not spawnName then
-            break
-        end
-        self:_teleportPlayerToSpawn(player, spawnName)
+    local spawnPoints = MapService:GetPlayerSpawnPoints()
+    if #spawnPoints == 0 then
+        return
+    end
+
+    -- Fisher-Yates shuffle the player list so spawn assignment isn't deterministic
+    -- across rounds (otherwise the first-joined player always lands on Spawn1).
+    local players = Players:GetPlayers()
+    for i = #players, 2, -1 do
+        local j = math.random(1, i)
+        players[i], players[j] = players[j], players[i]
+    end
+
+    -- Round-robin through the spawn list. With 10 spawns and up to 10 players,
+    -- every player gets a unique spot; if MaxPlayers is ever raised, the modulo
+    -- wraps so we never index out of bounds.
+    for i, player in ipairs(players) do
+        local spawnPart = spawnPoints[((i - 1) % #spawnPoints) + 1]
+        self:_teleportPlayerToPosition(player, spawnPart.Position)
     end
 end
 
-function RoundService:_flushCurrentHolder()
+-- Writes the elapsed-since-start time onto `holderToFlush` and clears the
+-- tick-start timestamp. Pass the player whose run is ending — do NOT ask
+-- TagService for the current holder here, because by the time we get a
+-- holder-change notification, TagService._currentHolder is already the new
+-- holder. Asking would credit the wrong player. See TagOccurred signal,
+-- which carries (previous, new) explicitly.
+--
+-- The `self._holdTimes[holderToFlush] ~= nil` guard skips flushing players
+-- who have already been removed from the table (e.g. via PlayerRemoving's
+-- cleanup running before our flush). Without it, a leaving holder could
+-- ressurrect themselves into _holdTimes as a zombie entry that _determineWinner
+-- would treat as a valid scorer.
+function RoundService:_flushHolder(holderToFlush: Player?)
     if not self._currentHolderSince then
         return
     end
-    local currentHolder = TagService:GetCurrentHolder()
-    if currentHolder then
+    if holderToFlush and self._holdTimes[holderToFlush] ~= nil then
         local elapsed = os.clock() - self._currentHolderSince
-        self._holdTimes[currentHolder] = (self._holdTimes[currentHolder] or 0) + elapsed
+        self._holdTimes[holderToFlush] = self._holdTimes[holderToFlush] + elapsed
     end
     self._currentHolderSince = nil
 end
 
-function RoundService:_onHolderChanged(newHolder: Player?)
+function RoundService:_onTagOccurred(previousHolder: Player?, newHolder: Player?)
     if not self._isActive then
         return
     end
-    self:_flushCurrentHolder()
+    -- 1. Flush the previous holder's elapsed run BEFORE we start the new one.
+    --    Using TagOccurred's explicit `previous` arg means we always credit the
+    --    right player, even if multiple holder changes happen quickly or if
+    --    the previous holder died/left.
+    self:_flushHolder(previousHolder)
+    -- 2. Start the next run, only if there's a new holder. A nil newHolder
+    --    (object went neutral via death/leave/release) leaves the tick-start
+    --    timestamp cleared so the next auto-pickup will set it fresh.
     if newHolder then
         self._currentHolderSince = os.clock()
     end
@@ -213,7 +239,11 @@ function RoundService:EndRound()
         return
     end
     self._isActive = false
-    self:_flushCurrentHolder()
+    -- Final flush of whoever is currently holding the object so their last
+    -- "run" gets counted. Safe to use TagService here because no holder
+    -- transition is in flight — EndRound runs from the round-timer expiring,
+    -- not from a holder-change handler.
+    self:_flushHolder(TagService:GetCurrentHolder())
 
     local winner, isDraw = self:_determineWinner()
     local result: RoundResult = {
@@ -239,12 +269,58 @@ end
 
 function RoundService:KnitInit() end
 
+function RoundService:_onPlayerJoinedMidRound(player: Player)
+    -- Seed hold time so the scoreboard immediately picks the player up. Without
+    -- this the new joiner stays invisible on the right-side score list until
+    -- the next round starts and StartRound() re-seeds the table.
+    if self._holdTimes[player] == nil then
+        self._holdTimes[player] = 0
+    end
+
+    -- Teleport them onto a spawn anchor near the arena so they don't drop in
+    -- on top of the pyramid or outside the map. Wait for the character on the
+    -- first CharacterAdded so the teleport actually has a root to move.
+    local function placeOnSpawn()
+        local spawnPoints = MapService:GetPlayerSpawnPoints()
+        if #spawnPoints == 0 then
+            return
+        end
+        local spawnPart = spawnPoints[math.random(1, #spawnPoints)]
+        self:_teleportPlayerToPosition(player, spawnPart.Position)
+    end
+
+    if player.Character then
+        placeOnSpawn()
+        return
+    end
+
+    -- Once-only listener: we only want to override the FIRST spawn after the
+    -- mid-round join. Subsequent respawns (death, next round) are handled by
+    -- Roblox's default SpawnLocation flow or by _assignSpawns at round start.
+    local conn: RBXScriptConnection?
+    conn = player.CharacterAdded:Connect(function()
+        if conn then
+            conn:Disconnect()
+            conn = nil
+        end
+        -- task.defer so the body/root parts have a chance to assemble before
+        -- we CFrame the root. Without it the teleport occasionally no-ops on
+        -- the very first character spawn.
+        task.defer(placeOnSpawn)
+    end)
+end
+
 function RoundService:KnitStart()
     MapService = Knit.GetService("MapService")
     TagService = Knit.GetService("TagService")
 
-    TagService.HolderChanged:Connect(function(newHolder: Player?)
-        self:_onHolderChanged(newHolder)
+    -- TagOccurred carries (previousHolder, newHolder). HolderChanged only
+    -- carries the new holder, which is not enough to credit the right player
+    -- when the run ends (TagService._currentHolder has already been swapped
+    -- to the new holder by the time the signal fires). Always use TagOccurred
+    -- for time-tracking.
+    TagService.TagOccurred:Connect(function(previousHolder: Player?, newHolder: Player?)
+        self:_onTagOccurred(previousHolder, newHolder)
     end)
 
     local function scheduleStartIfReady()
@@ -261,7 +337,28 @@ function RoundService:KnitStart()
         end)
     end
 
-    Players.PlayerAdded:Connect(scheduleStartIfReady)
+    Players.PlayerAdded:Connect(function(player)
+        -- Hot-join: register the joiner in hold times so the scoreboard shows
+        -- them, and put them on a spawn anchor if a round is already running.
+        if self._isActive then
+            self:_onPlayerJoinedMidRound(player)
+        end
+        scheduleStartIfReady()
+    end)
+    Players.PlayerRemoving:Connect(function(player)
+        -- Race-handling: TagService also listens to PlayerRemoving and calls
+        -- _setHolder(nil) on a leaving holder, which fires TagOccurred and
+        -- normally flushes their elapsed time. But the relative listener
+        -- order is not guaranteed — if WE run first, we'd clear _holdTimes
+        -- before TagService's flush could land. Explicitly flush here when
+        -- the leaving player is the current holder so the final run is
+        -- credited regardless of listener order. The _flushHolder guard
+        -- against re-adding a cleared entry handles the inverse order.
+        if TagService:GetCurrentHolder() == player then
+            self:_flushHolder(player)
+        end
+        self._holdTimes[player] = nil
+    end)
     scheduleStartIfReady()
 
     self._heartbeatConn = RunService.Heartbeat:Connect(function()

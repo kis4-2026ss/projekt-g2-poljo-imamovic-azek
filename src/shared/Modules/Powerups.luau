@@ -27,7 +27,7 @@ local Powerups: { [string]: PowerupDef } = {
         kind = "instant",
         color = Color3.fromRGB(120, 220, 255),
         duration = 5,
-        walkSpeedMult = 1.5,
+        walkSpeedMult = 3.5,
     },
     DoubleJump = {
         name = "DoubleJump",
@@ -43,7 +43,7 @@ local Powerups: { [string]: PowerupDef } = {
         color = Color3.fromRGB(255, 140, 200),
         activeKey = Enum.KeyCode.Q,
         wallDuration = 5,
-        wallSize = Vector3.new(8, 8, 1),
+        wallSize = Vector3.new(32, 80, 1),
     },
 }
 

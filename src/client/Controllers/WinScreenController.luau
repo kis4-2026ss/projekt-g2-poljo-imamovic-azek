@@ -102,11 +102,22 @@ local function buildScreen(result: RoundResult): ScreenGui
     scoresLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
     scoresLayout.Parent = scoresFrame
 
+    -- Knit replicates non-dense number-keyed tables as JSON-dicts, so the
+    -- holdTimes keys arrive as STRINGS on the client when user-ids are large
+    -- (live servers). tonumber() defensively so the win screen actually shows
+    -- player rows instead of just the title. See HUDController for the same
+    -- fix and the longer write-up of why.
     local entries: { { userId: number, time: number } } = {}
-    for userId, time in pairs(result.holdTimes) do
-        table.insert(entries, { userId = userId, time = time })
+    for k, time in pairs(result.holdTimes) do
+        local userId = if typeof(k) == "number" then k else tonumber(k)
+        if userId and typeof(time) == "number" then
+            table.insert(entries, { userId = userId, time = time })
+        end
     end
     table.sort(entries, function(a, b)
+        if a.time == b.time then
+            return a.userId < b.userId
+        end
         return a.time > b.time
     end)
 

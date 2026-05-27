@@ -171,9 +171,23 @@ function PowerupService:_applyNextTrigger(player: Player, def: Powerups.PowerupD
         return
     end
     if def.name == "DoubleJump" then
-        local expires = os.clock() + (def.nextTriggerExpires or 30)
+        local duration = def.nextTriggerExpires or 30
+        local expires = os.clock() + duration
         humanoid:SetAttribute(DOUBLE_JUMP_ATTRIBUTE, true)
         humanoid:SetAttribute(DOUBLE_JUMP_EXPIRE_ATTRIBUTE, expires)
+        -- Auto-clear the attribute after the window. Server's os.clock() is
+        -- consistent with the apply-time, so the expires-stamp comparison is
+        -- safe here (unlike on the client). Skip the clear if a fresher pickup
+        -- bumped the expires-stamp in the meantime.
+        task.delay(duration, function()
+            if
+                humanoid.Parent
+                and humanoid:GetAttribute(DOUBLE_JUMP_EXPIRE_ATTRIBUTE) == expires
+            then
+                humanoid:SetAttribute(DOUBLE_JUMP_ATTRIBUTE, false)
+                humanoid:SetAttribute(DOUBLE_JUMP_EXPIRE_ATTRIBUTE, 0)
+            end
+        end)
     end
 end
 
@@ -196,7 +210,9 @@ function PowerupService:_spawnWall(player: Player, def: Powerups.PowerupDef)
     end
     local size = def.wallSize or Vector3.new(8, 8, 1)
     local lookVector = root.CFrame.LookVector
-    local wallCFrame = root.CFrame * CFrame.new(0, size.Y / 2 - 2, 2)
+    -- Center wall on player so it extends symmetrically above and below,
+    -- covering the full vertical regardless of placement height.
+    local wallCFrame = root.CFrame * CFrame.new(0, 0, 2)
     wallCFrame = CFrame.new(wallCFrame.Position, wallCFrame.Position + lookVector)
 
     local wall = Instance.new("Part")

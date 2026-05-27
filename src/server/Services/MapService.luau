@@ -11,7 +11,10 @@
         Obstacles/            — vault-height cubes + mantle walls scattered
         Pillars/              — tall thin cover columns
         SpawnPoints/
-            Player1 / Player2 — 1v1 spawns at opposite corners
+            Spawn1 .. Spawn10 — 10 spawns distributed around the arena
+                                (every 36° on a circle of radius 52). Roblox's
+                                default respawn picks one randomly; RoundService
+                                round-robins them at round start.
             Object            — center anchor (over the pyramid top)
             Powerups/         — Parts marking powerup spawn anchors
 ]]
@@ -305,24 +308,30 @@ function MapService:_buildSpawnPoints(parent: Instance)
     spawnPoints.Name = "SpawnPoints"
     spawnPoints.Parent = parent
 
-    local spawn1 = Instance.new("SpawnLocation")
-    spawn1.Name = "Player1"
-    spawn1.Size = Vector3.new(6, 1, 6)
-    spawn1.Position = Vector3.new(52, 0.5, 52)
-    spawn1.Color = SPAWN_COLOR
-    spawn1.Material = Enum.Material.Neon
-    spawn1.Anchored = true
-    spawn1.CanCollide = true
-    spawn1.Neutral = true
-    spawn1.AllowTeamChangeOnTouch = false
-    spawn1.TopSurface = Enum.SurfaceType.Smooth
-    spawn1.BottomSurface = Enum.SurfaceType.Smooth
-    spawn1.Parent = spawnPoints
+    -- 10 spawns spaced evenly on a circle (radius 52) so a full 10-player
+    -- server has a unique spot per player without anyone landing on top of
+    -- the central pyramid or the corner towers.
+    local SPAWN_COUNT = 10
+    local SPAWN_RADIUS = 52
+    for i = 1, SPAWN_COUNT do
+        local angle = ((i - 1) / SPAWN_COUNT) * math.pi * 2
+        local x = math.cos(angle) * SPAWN_RADIUS
+        local z = math.sin(angle) * SPAWN_RADIUS
 
-    local spawn2 = spawn1:Clone()
-    spawn2.Name = "Player2"
-    spawn2.Position = Vector3.new(-52, 0.5, -52)
-    spawn2.Parent = spawnPoints
+        local spawn = Instance.new("SpawnLocation")
+        spawn.Name = string.format("Spawn%d", i)
+        spawn.Size = Vector3.new(6, 1, 6)
+        spawn.Position = Vector3.new(x, 0.5, z)
+        spawn.Color = SPAWN_COLOR
+        spawn.Material = Enum.Material.Neon
+        spawn.Anchored = true
+        spawn.CanCollide = true
+        spawn.Neutral = true
+        spawn.AllowTeamChangeOnTouch = false
+        spawn.TopSurface = Enum.SurfaceType.Smooth
+        spawn.BottomSurface = Enum.SurfaceType.Smooth
+        spawn.Parent = spawnPoints
+    end
 
     makeAnchoredPart({
         name = "Object",
@@ -417,6 +426,30 @@ function MapService:GetSpawnPoint(name: string): BasePart?
         return target
     end
     return nil
+end
+
+-- Returns the list of named player spawns (Spawn1, Spawn2, ...) sorted by name.
+-- RoundService uses these to round-robin players at the start of every round
+-- so each player lands on a unique spot when the lobby is full.
+function MapService:GetPlayerSpawnPoints(): { BasePart }
+    local result: { BasePart } = {}
+    local mapFolder = self._mapFolder
+    if not mapFolder then
+        return result
+    end
+    local spawns = mapFolder:FindFirstChild("SpawnPoints")
+    if not spawns then
+        return result
+    end
+    for _, child in ipairs(spawns:GetChildren()) do
+        if child:IsA("BasePart") and string.sub(child.Name, 1, 5) == "Spawn" then
+            table.insert(result, child)
+        end
+    end
+    table.sort(result, function(a, b)
+        return a.Name < b.Name
+    end)
+    return result
 end
 
 function MapService:GetPowerupSpots(): { BasePart }

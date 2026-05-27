@@ -2,9 +2,9 @@
 --[[
     MovementCameraController
     Drives camera feel based on MovementController state changes:
-        - Tweens FieldOfView (70 normal -> 86 slide / 82 wallrun / 92 dive)
+        - Tweens FieldOfView (70 normal -> 86 slide / 82 wallrun)
         - Tilts camera roll (post-camera CFrame rotation around Z)
-        - Shifts Humanoid.CameraOffset for dip (slide/roll) and lean (wallrun)
+        - Shifts Humanoid.CameraOffset for dip (slide) and lean (wallrun)
     All interpolation is exponential damping so changes feel punchy but smooth.
     Binds to RenderStep AFTER Roblox's default camera step so we overlay without
     fighting the default camera's positioning.
@@ -23,15 +23,7 @@ local Knit = require(ReplicatedStorage.Packages.Knit)
 local Config = require(ReplicatedStorage.Shared.Modules.MovementConfig)
 
 --// Types
-type State =
-    "Grounded"
-    | "Sliding"
-    | "Airborne"
-    | "WallRunning"
-    | "Vaulting"
-    | "Mantling"
-    | "Diving"
-    | "Rolling"
+type State = "Grounded" | "Sliding" | "Airborne" | "WallRunning" | "Vaulting" | "Mantling"
 
 --// Module
 local MovementCameraController = Knit.CreateController({
@@ -87,14 +79,6 @@ function MovementCameraController:_setTargetsForState(state: State)
             self._targetRoll = conf.TiltWallrunRight
             self._targetOffset = conf.OffsetWallrunRight
         end
-    elseif state == "Diving" then
-        self._targetFOV = conf.DiveFOV
-        self._targetRoll = conf.TiltNone
-        self._targetOffset = conf.OffsetNone
-    elseif state == "Rolling" then
-        self._targetFOV = conf.RollFOV
-        self._targetRoll = conf.TiltRoll
-        self._targetOffset = conf.OffsetRoll
     elseif state == "Vaulting" then
         self._targetFOV = conf.VaultFOV
         self._targetRoll = conf.TiltNone

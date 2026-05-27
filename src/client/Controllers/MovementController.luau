@@ -5,13 +5,11 @@
 
     State machine:
         Grounded    - default, constant sprint baseline, auto-vault detection
-        Sliding     - momentum-based slide with friction decay
+        Sliding     - momentum-based slide with friction decay (works in air too)
         Airborne    - after jump or walking off ledge, wallrun + mantle detection
         WallRunning - locked to a vertical surface, forward velocity along wall
         Vaulting    - ballistic arc over a knee-high obstacle
         Mantling    - ballistic climb onto a ledge from air
-        Diving      - forward dive superman pose while airborne
-        Rolling     - post-dive / post-high-fall, preserves momentum, short i-time
 
     Jump handling:
         Humanoid.JumpPower = 0 so we own the jump. Space enters jump manually:
@@ -41,18 +39,15 @@ local Config = require(ReplicatedStorage.Shared.Modules.MovementConfig)
 --// Constants
 local SPEED_BOOST_ATTRIBUTE = "SpeedBoostMult"
 local DOUBLE_JUMP_ATTRIBUTE = "HasDoubleJump"
-local DOUBLE_JUMP_EXPIRE_ATTRIBUTE = "DoubleJumpExpiresAt"
+-- DoubleJumpExpiresAt also lives on the humanoid but is consulted only by the
+-- server (its os.clock() is consistent with the apply-time). The client used to
+-- read it too and reject the jump if expired, but os.clock() is per-process
+-- uptime — server and client clocks don't share an origin — so a client whose
+-- process had been running longer than the server's would silently see every
+-- pickup as already-expired. Server-side task.delay handles the timeout now.
 
 --// Types
-export type State =
-    "Grounded"
-    | "Sliding"
-    | "Airborne"
-    | "WallRunning"
-    | "Vaulting"
-    | "Mantling"
-    | "Diving"
-    | "Rolling"
+export type State = "Grounded" | "Sliding" | "Airborne" | "WallRunning" | "Vaulting" | "Mantling"
 
 export type WallSide = "Left" | "Right"
 
@@ -91,10 +86,15 @@ local MovementController = Knit.CreateController({
     _wallNormal = Vector3.zero,
     _wallrunEndTime = 0,
     _wallrunCooldownUntil = 0,
+    _wallrunSpeed = 0,
 
-    -- Dive / Roll
-    _diveCooldownUntil = 0,
-    _rollEndTime = 0,
+    -- Bunny chain (slide-jump-slide momentum stack)
+    _chainBonus = 0,
+    _chainExpireTime = 0,
+
+    -- Peak horizontal speed since last grounded; survives wall collisions
+    -- so wallrun/walljump can recover the pre-collision momentum.
+    _peakAirSpeed = 0,
 
     StateChanged = Signal.new(),
 })
@@ -157,6 +157,9 @@ function MovementController:_setState(newState: State)
     end
     local oldState = self._state
     self._state = newState
+    if newState == "Grounded" then
+        self._peakAirSpeed = 0
+    end
     self.StateChanged:Fire(newState, oldState)
 end
 
@@ -181,8 +184,17 @@ function MovementController:_startSlide()
     local horizontal = horizontalize(lookVec)
     local currentHorizontalSpeed = horizontalize(rootPart.AssemblyLinearVelocity).Magnitude
 
-    self._slideSpeed = math.max(Config.Slide.InitialSpeed, currentHorizontalSpeed + 6)
-    self._slideEndTime = os.clock() + Config.Slide.MaxDuration
+    local now = os.clock()
+    if now <= self._chainExpireTime then
+        self._chainBonus =
+            math.min(self._chainBonus + Config.BunnyChain.BonusPerLink, Config.BunnyChain.MaxBonus)
+    else
+        self._chainBonus = 0
+    end
+
+    local baseSpeed = math.max(Config.Slide.InitialSpeed, currentHorizontalSpeed + 6)
+    self._slideSpeed = baseSpeed + self._chainBonus
+    self._slideEndTime = now + Config.Slide.MaxDuration
 
     humanoid.WalkSpeed = 0
     humanoid.HipHeight = humanoid.HipHeight - Config.Slide.HipHeightDrop
@@ -245,6 +257,7 @@ function MovementController:_executeJump(isBuffered: boolean?)
     local wasSliding = self._state == "Sliding"
     if wasSliding then
         self:_endSlide(true)
+        self._chainExpireTime = os.clock() + Config.BunnyChain.Window
     end
 
     humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
@@ -265,7 +278,7 @@ function MovementController:_executeJump(isBuffered: boolean?)
 end
 
 function MovementController:_tryJump()
-    if self._state == "Vaulting" or self._state == "Mantling" or self._state == "Rolling" then
+    if self._state == "Vaulting" or self._state == "Mantling" then
         return
     end
 
@@ -279,7 +292,7 @@ function MovementController:_tryJump()
     local grounded = self:_isGroundedHumanoidState()
     local withinCoyote = (os.clock() - self._lastGroundedTime) <= Config.Jump.CoyoteTime
 
-    if grounded or withinCoyote or self._state == "Sliding" then
+    if grounded or withinCoyote then
         self:_executeJump(false)
         return
     end
@@ -296,13 +309,21 @@ function MovementController:_tryDoubleJump()
     if humanoid:GetAttribute(DOUBLE_JUMP_ATTRIBUTE) ~= true then
         return
     end
-    local expires = humanoid:GetAttribute(DOUBLE_JUMP_EXPIRE_ATTRIBUTE)
-    if typeof(expires) == "number" and expires > 0 and os.clock() > expires then
-        return
+    -- No client-side expiry check: see the constants block. Server's
+    -- task.delay clears the attribute when the powerup window ends, and
+    -- ConsumeDoubleJump validates again before granting the jump.
+
+    -- Preserve peak air horizontal speed; Roblox's humanoid air-control
+    -- bleeds momentum down toward WalkSpeed while flying, so we restore
+    -- the pre-deceleration magnitude in the player's current direction.
+    local v = rootPart.AssemblyLinearVelocity
+    local horiz = Vector3.new(v.X, 0, v.Z)
+    local mag = horiz.Magnitude
+    if mag > 0.01 and self._peakAirSpeed > mag then
+        horiz = horiz.Unit * self._peakAirSpeed
     end
 
-    local v = rootPart.AssemblyLinearVelocity
-    rootPart.AssemblyLinearVelocity = Vector3.new(v.X, Config.DoubleJump.Velocity, v.Z)
+    rootPart.AssemblyLinearVelocity = Vector3.new(horiz.X, Config.DoubleJump.Velocity, horiz.Z)
     humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
     PowerupService.UseDoubleJump:Fire()
 end
@@ -504,6 +525,7 @@ function MovementController:_tryStartWallrun()
     self._wallNormal = probe.normal
     self._wallSide = probe.side
     self._wallrunEndTime = os.clock() + Config.Wallrun.MaxDuration
+    self._wallrunSpeed = math.max(horizontalSpeed, self._peakAirSpeed, Config.Wallrun.Speed)
 
     humanoid.WalkSpeed = 0
     humanoid.AutoRotate = true
@@ -535,9 +557,9 @@ function MovementController:_updateWallrun(_dt: number)
     end
 
     rootPart.AssemblyLinearVelocity = Vector3.new(
-        alongDir.X * Config.Wallrun.Speed - probe.normal.X * Config.Wallrun.StickForce,
+        alongDir.X * self._wallrunSpeed - probe.normal.X * Config.Wallrun.StickForce,
         Config.Wallrun.VerticalHoldVelocity,
-        alongDir.Z * Config.Wallrun.Speed - probe.normal.Z * Config.Wallrun.StickForce
+        alongDir.Z * self._wallrunSpeed - probe.normal.Z * Config.Wallrun.StickForce
     )
 
     if os.clock() > self._wallrunEndTime then
@@ -574,10 +596,17 @@ function MovementController:_walljump()
         forward = awayDir
     end
 
+    -- Preserve incoming horizontal velocity and ADD walljump impulse on top.
+    -- Faster wallrun -> faster walljump -> farther jump. Aim where you want
+    -- to go to compound the away+forward push with your existing momentum.
+    local v = rootPart.AssemblyLinearVelocity
+    local awayBoost = awayDir * Config.Walljump.AwaySpeed
+    local forwardBoost = forward * Config.Walljump.ForwardSpeed
+
     rootPart.AssemblyLinearVelocity = Vector3.new(
-        awayDir.X * Config.Walljump.AwaySpeed + forward.X * Config.Walljump.ForwardSpeed,
+        v.X + awayBoost.X + forwardBoost.X,
         Config.Walljump.UpSpeed,
-        awayDir.Z * Config.Walljump.AwaySpeed + forward.Z * Config.Walljump.ForwardSpeed
+        v.Z + awayBoost.Z + forwardBoost.Z
     )
 
     humanoid.WalkSpeed = Config.Run.Speed * self:_speedMultiplier()
@@ -589,82 +618,10 @@ function MovementController:_walljump()
     self:_setState("Airborne")
 end
 
---// Dive / Roll
-
-function MovementController:_tryDive()
-    if self._state ~= "Airborne" then
-        return
-    end
-    if os.clock() < self._diveCooldownUntil then
-        return
-    end
-    local humanoid = self._humanoid
-    local rootPart = self._rootPart
-    if not humanoid or not rootPart then
-        return
-    end
-
-    local forward = horizontalize(rootPart.CFrame.LookVector)
-    if forward.Magnitude < 0.1 then
-        forward = Vector3.new(0, 0, -1)
-    end
-
-    rootPart.AssemblyLinearVelocity = Vector3.new(
-        forward.X * Config.Dive.ForwardSpeed,
-        Config.Dive.UpSpeed,
-        forward.Z * Config.Dive.ForwardSpeed
-    )
-    humanoid.WalkSpeed = 0
-    self._diveCooldownUntil = os.clock() + Config.Dive.Cooldown
-    self:_setState("Diving")
-end
-
-function MovementController:_startRoll()
-    local humanoid = self._humanoid
-    local rootPart = self._rootPart
-    if not humanoid or not rootPart then
-        return
-    end
-
-    local forward = horizontalize(rootPart.CFrame.LookVector)
-    if forward.Magnitude < 0.1 then
-        forward = Vector3.new(0, 0, -1)
-    end
-    rootPart.AssemblyLinearVelocity =
-        Vector3.new(forward.X * Config.Roll.ForwardSpeed, 0, forward.Z * Config.Roll.ForwardSpeed)
-    humanoid.WalkSpeed = 0
-    humanoid.HipHeight = humanoid.HipHeight - Config.Roll.HipHeightDrop
-    self._rollEndTime = os.clock() + Config.Roll.Duration
-    self:_setState("Rolling")
-end
-
-function MovementController:_endRoll()
-    if self._state ~= "Rolling" then
-        return
-    end
-    local humanoid = self._humanoid
-    if humanoid then
-        humanoid.HipHeight = humanoid.HipHeight + Config.Roll.HipHeightDrop
-        humanoid.WalkSpeed = Config.Run.Speed * self:_speedMultiplier()
-    end
-    self:_setState("Grounded")
-end
-
-function MovementController:_updateRoll()
-    if self._state ~= "Rolling" then
-        return
-    end
-    if os.clock() > self._rollEndTime then
-        self:_endRoll()
-    end
-end
-
 --// Transition logic based on Humanoid grounding
 
 function MovementController:_updateGroundedness()
-    local humanoid = self._humanoid
-    local rootPart = self._rootPart
-    if not humanoid or not rootPart then
+    if not self._humanoid then
         return
     end
 
@@ -674,31 +631,15 @@ function MovementController:_updateGroundedness()
     end
 
     if self._state == "Airborne" and grounded then
-        local fallSpeed = -rootPart.AssemblyLinearVelocity.Y
-        if fallSpeed > Config.Roll.FallTriggerSpeed then
-            self:_startRoll()
-        else
-            self:_setState("Grounded")
-        end
-
+        self:_setState("Grounded")
         if os.clock() < self._jumpBufferedUntil then
             self:_executeJump(true)
         end
         return
     end
 
-    if self._state == "Diving" and grounded then
-        self:_startRoll()
-        return
-    end
-
     if self._state == "Grounded" and not grounded then
         self:_setState("Airborne")
-        return
-    end
-
-    if self._state == "Sliding" and not grounded then
-        self:_endSlide(true)
         return
     end
 end
@@ -712,11 +653,7 @@ function MovementController:_onInputBegan(input: InputObject)
 
     if input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.C then
         if self._state == "Grounded" or self._state == "Airborne" then
-            if self._state == "Grounded" then
-                self:_startSlide()
-            else
-                self:_tryDive()
-            end
+            self:_startSlide()
         end
     elseif input.KeyCode == Enum.KeyCode.Space then
         self:_tryJump()
@@ -744,6 +681,14 @@ function MovementController:_update(dt: number)
 
     self:_updateGroundedness()
 
+    if self._state ~= "Grounded" and self._rootPart then
+        local v = self._rootPart.AssemblyLinearVelocity
+        local horizontalSpeed = Vector3.new(v.X, 0, v.Z).Magnitude
+        if horizontalSpeed > self._peakAirSpeed then
+            self._peakAirSpeed = horizontalSpeed
+        end
+    end
+
     if self._state == "Sliding" then
         self:_updateSlide(dt)
     elseif self._state == "WallRunning" then
@@ -752,8 +697,6 @@ function MovementController:_update(dt: number)
         self:_updateVault()
     elseif self._state == "Mantling" then
         self:_updateMantle()
-    elseif self._state == "Rolling" then
-        self:_updateRoll()
     elseif self._state == "Airborne" then
         self:_tryStartWallrun()
         if self._state == "Airborne" then
@@ -786,8 +729,10 @@ function MovementController:_bindCharacter(character: Model)
     self._mantleCooldownUntil = 0
     self._wallrunEndTime = 0
     self._wallrunCooldownUntil = 0
-    self._diveCooldownUntil = 0
-    self._rollEndTime = 0
+    self._wallrunSpeed = 0
+    self._chainBonus = 0
+    self._chainExpireTime = 0
+    self._peakAirSpeed = 0
 
     humanoid.Died:Connect(function()
         self._character = nil

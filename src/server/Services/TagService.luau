@@ -16,7 +16,11 @@ local Knit = require(ReplicatedStorage.Packages.Knit)
 local Signal = require(ReplicatedStorage.Packages.Signal)
 
 --// Constants
-local TAG_MAX_DISTANCE = 6
+-- Tag-grab radius around the holder. Roughly 3 character heights — close
+-- enough that you have to be aware of nearby threats, far enough that you
+-- don't have to clip into the holder's hitbox to steal. Must stay in sync
+-- with CrosshairController.TAG_RANGE_STUDS (client lock-on visual gate).
+local TAG_MAX_DISTANCE = 18
 local PICKUP_DISTANCE = 5
 local STUN_DURATION_AFTER_STEAL = 2.5
 local OBJECT_NAME = "GameObject"
